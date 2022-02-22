@@ -1,3 +1,4 @@
+import json
 import time
 import asyncio
 import logging
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class Asyncit:  # pylint: disable=too-many-instance-attributes
-    def __init__(self, pool_size=0, rate_limit=None, max_retry=None, save_output=False):
+    def __init__(self, pool_size=0, rate_limit=None, max_retry=None, save_output=False, save_as_json=False):
         """
         :param pool_size:
         :param rate_limit: list of dicts with: max_calls, period_sec
@@ -31,6 +32,7 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
         self.loop = loop
 
         self.save_output = save_output
+        self.save_as_json = save_as_json
         self.output_queue = QueueEx() if self.save_output else None
         self.sem = threading.Semaphore(pool_size) if pool_size else None
         self.clock_time = time.perf_counter
@@ -100,6 +102,8 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
                 value = func(*args, **kwargs)
                 save_value = bool(value is not None and self.save_output and self.output_queue is not None)
                 if save_value:
+                    if self.save_as_json:
+                        value = json.dumps(value)
                     self.output_queue.put(value)
                 break
             except asyncio.CancelledError:
@@ -132,7 +136,10 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
         self.futures = []
 
     def get_output(self):
-        return self.output_queue.to_list() if self.output_queue else None
+        output = self.output_queue.to_list() if self.output_queue else None
+        if output and self.save_as_json:
+            output = [json.loads(i) for i in output]  # pylint: disable=not-an-iterable
+        return output
 
     async def _gather_with_concurrency(self):
         await asyncio.gather(*self.futures, return_exceptions=True)
