@@ -89,7 +89,7 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
                     limit.num_calls += 1
                     limit.total_calls += 1
                     if limit.num_calls > limit.max_calls:
-                        logger.info(f"going to sleep for {period_remaining} {limit}")
+                        logger.info(f"going to sleep for {period_remaining:.2f} {limit}")
                         time.sleep(period_remaining)
 
         value = None

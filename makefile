@@ -29,7 +29,7 @@ rebase:
 	git rebase main
 
 build:
-    make clean
+	make clean
 	python setup.py sdist
 
 publish:

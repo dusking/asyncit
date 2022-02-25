@@ -1,6 +1,12 @@
 import re
+from itertools import chain
 from collections import OrderedDict
 from collections.abc import Mapping
+
+str_base = str, bytes, bytearray
+items = "items"
+
+_RaiseKeyError = object()  # singleton for no-default behavior
 
 
 class RecursiveNone:
@@ -18,7 +24,51 @@ class RecursiveNone:
         return RecursiveNone()
 
 
-class DotDict(dict):
+class DotDictMeta(type):
+    def __repr__(cls):
+        return cls.__name__
+
+
+class DotDict(dict, metaclass=DotDictMeta):
+    """
+    a dictionary that supports dot notation
+    as well as dictionary access notation
+    usage: d = DotDict() or d = DotDict({'val1':'first'})
+    set attributes: d.val2 = 'second' or d['val2'] = 'second'
+    get attributes: d.val2 or d['val2']
+    """
+
+    __slots__ = ()
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+    def __getattr__(self, k):
+        value = self.get(k)
+        if isinstance(value, dict):
+            return DotDict(value)
+        return value
+
+    def __getitem__(self, k):
+        value = self.get(k)
+        if isinstance(value, dict):
+            return DotDict(value)
+        return value
+
+    def get(self, k, default=None):
+        value = super().get(k, default)
+        if isinstance(value, dict):
+            return DotDict(value)
+        return value
+
+    def update(self, **kwargs):
+        super().update(**kwargs)
+        return self
+
+    def copy(self):  # don't delegate w/ super - dict.copy() -> dict :(
+        return type(self)(self)
+
+
+class DotDictV1(dict):
     """
     a dictionary that supports dot notation
     as well as dictionary access notation
@@ -121,3 +171,68 @@ class CaseInsensitiveDict(dict):
         super().update(*args, **kwargs)
         for k in dict(*args, **kwargs):
             self.proxy[k.lower()] = k
+
+
+class CaseInsensitiveDictV2(dict):
+    __slots__ = ()
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
+    def process_args(self, mapping=(), **kwargs):
+        if hasattr(mapping, items):
+            mapping = getattr(mapping, items)()
+        return ((self.ensure_lower(k), v) for k, v in chain(mapping, getattr(kwargs, items)()))
+
+    @classmethod
+    def ensure_lower(cls, maybe_str):
+        """dict keys can be any hashable object - only call lower if str"""
+        return maybe_str.lower() if isinstance(maybe_str, str_base) else maybe_str
+
+    def __init__(self, mapping=(), **kwargs):
+        super().__init__(self.process_args(mapping, **kwargs))
+        for key, value in self.items():
+            if isinstance(value, dict):
+                self[key] = CaseInsensitiveDictV2(value)
+
+    def __getitem__(self, k):
+        return super().__getitem__(self.ensure_lower(k))
+
+    def __setitem__(self, k, v):
+        return super().__setitem__(self.ensure_lower(k), v)
+
+    def __delitem__(self, k):
+        return super().__delitem__(self.ensure_lower(k))
+
+    def __getattr__(self, k):
+        value = self.get(k)
+        if isinstance(value, dict):
+            return CaseInsensitiveDictV2(value)
+        return value
+
+    def get(self, k, default=None):
+        return super().get(self.ensure_lower(k), default)
+
+    def setdefault(self, k, default=None):
+        return super().setdefault(self.ensure_lower(k), default)
+
+    def pop(self, k, v=_RaiseKeyError):
+        if v is _RaiseKeyError:
+            return super().pop(self.ensure_lower(k))
+        return super().pop(self.ensure_lower(k), v)
+
+    def update(self, mapping=(), **kwargs):
+        super().update(self.process_args(mapping, **kwargs))
+        return self
+
+    def __contains__(self, k):
+        return super().__contains__(self.ensure_lower(k))
+
+    def copy(self):  # don't delegate w/ super - dict.copy() -> dict :(
+        return type(self)(self)
+
+    @classmethod
+    def fromkeys(cls, keys, value=None):
+        return super().fromkeys((cls.ensure_lower(k) for k in keys), value)
+
+    # def __repr__(self):
+    #     return '{0}({1})'.format(type(self).__name__, super().__repr__())
