@@ -14,12 +14,39 @@ logger = logging.getLogger(__name__)
 
 
 class Asyncit:  # pylint: disable=too-many-instance-attributes
-    def __init__(self, pool_size=0, rate_limit=None, max_retry=None, save_output=False, save_as_json=False):
-        """
-        :param pool_size:
-        :param rate_limit: list of dicts with: max_calls, period_sec
-        :param save_output:
-        """
+    """Create Asyncit client, for simple run of function using asuncio.
+
+    :param pool_size: Max function concurrent invocations.
+    :param rate_limit: List of dicts with: max_calls, period_sec
+    :param max_retry: If value greater than 1, retry function run in case of exception
+    :param save_output: If true, function returned valued are saved in a queue.
+    :param save_as_json: If true and save_output is true, function returned valued wil be saved as json values.
+    :param iter_indication: If true, a log will be printed every `iter` invocations
+
+    Here is a sample usage example:
+    >>> from asyncit import Asyncit
+    >>> asyncit = Asyncit(iter_indication=10)
+    >>> for i in range(100):
+    >>>     asyncit.run(time.sleep, 1)
+    In the following example the finction run will be limited by both pool size and rate limit:
+    No more than 100 calls in 5 sec.
+    >>> asyncit = Asyncit(
+    >>>     save_output=True,
+    >>>     save_as_json=True,
+    >>>     pool_size=100,
+    >>>     rate_limit=[{"period_sec": 5, "max_calls": 100}],
+    >>>     iter_indication=100,
+    >>> )
+    >>> for i in range(100):
+    >>>     asyncit.run(foo_call_some_api, arg1, arg2)
+    >>> asyncit.wait()
+    >>> return asyncit.get_output()
+    """
+
+    def __init__(
+        self, pool_size=0, rate_limit=None, max_retry=None, save_output=False, save_as_json=False, iter_indication=None
+    ):
+        """Init Asyncit."""
         rate_limit = rate_limit or []
         self.futures = []
 
@@ -30,7 +57,6 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         self.loop = loop
-
         self.save_output = save_output
         self.save_as_json = save_as_json
         self.output_queue = QueueEx() if self.save_output else None
@@ -39,40 +65,43 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
         self.raise_on_limit = True
         self.rate_limit = []
         self.max_retry = max_retry or 1
+        self.iter_indication = iter_indication
+        self.iter_counter = 0
         for limit in rate_limit:
             limit = DotDict(limit)
             self.rate_limit.append(
                 DotDict(
-                    dict(
-                        max_calls=limit.max_calls,
-                        period_sec=limit.period_sec,
-                        last_reset=self.clock_time(),
-                        num_calls=0,
-                        total_calls=0,
-                    )
+                    max_calls=limit.max_calls,
+                    period_sec=limit.period_sec,
+                    last_reset=self.clock_time(),
+                    num_calls=0,
+                    total_calls=0,
                 )
             )
         self.lock = threading.RLock()
         self.total_counter = 0
         self.total_run_start = self.clock_time()
 
-    def __period_remaining(self, last_reset, period_sec):
+    def __period_remaining(self, last_reset, period_sec) -> float:
         """
         Return the period remaining for the current rate limit window.
-        :return: The remaing period.
-        :rtype: float
         """
         elapsed = self.clock_time() - last_reset
         return period_sec - elapsed
 
     def reset_start_time(self):
+        """Reset the start time, to be used in case there is some time between Asyncit instance creation
+        and the actual time the run is being called.
+        """
         self.total_run_start = self.clock_time()
 
     def total_run_time(self):
+        """Get the elapsed time, in a human-readable format."""
         elapsed_time = self.clock_time() - self.total_run_start
         return str(timedelta(seconds=elapsed_time)).split(".", maxsplit=1)[0]
 
     def func_wrapper(self, func, *args, **kwargs):
+        """The wrapper for the function execution"""
         if self.sem:
             self.sem.acquire()
 
@@ -100,6 +129,10 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
             retry_counter += 1
             try:
                 value = func(*args, **kwargs)
+                if self.iter_indication:
+                    self.iter_counter += 1
+                    if self.iter_counter % self.iter_indication == 0:
+                        logger.info(f"running iter {self.iter_counter}")
                 save_value = bool(value is not None and self.save_output and self.output_queue is not None)
                 if save_value:
                     if self.save_as_json:
@@ -126,16 +159,38 @@ class Asyncit:  # pylint: disable=too-many-instance-attributes
         return value
 
     def run(self, func, *args, **kwargs):
+        """Execute the given function in async way.
+
+        :param func: The function to be invoked.
+        :param args: Positional arguments for the function.
+        :param kwargs: Keyword arguments for the function.
+        """
         func = partial(self.func_wrapper, func, *args, **kwargs)
 
         # Run tasks in the default loop's executor
         self.futures.append(self.loop.run_in_executor(None, func))
 
     def wait(self):
+        """Wait fot all run to be completed."""
         self.loop.run_until_complete(self._gather_with_concurrency())
         self.futures = []
 
     def get_output(self):
+        """Get the returned values
+
+        >>> from asyncit import Asyncit
+        >>> asyncit = Asyncit(
+        >>>     save_output=True,
+        >>>     save_as_json=True,
+        >>>     pool_size=200,
+        >>>     rate_limit=[{"period_sec": 5, "max_calls": 100}],
+        >>>     iter_indication=100
+        >>> )
+        >>> for i in range(200):
+        >>>     asyncit.run(echo, "A")
+        >>> asyncit.wait()
+        >>> return asyncit.get_output()
+        """
         output = self.output_queue.to_list() if self.output_queue else None
         if output and self.save_as_json:
             output = [json.loads(i) for i in output]  # pylint: disable=not-an-iterable
