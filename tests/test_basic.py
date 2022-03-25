@@ -44,6 +44,14 @@ def test_dotdict_set():
     dotdict["a"] = "A"
     assert dotdict.a == "A"
 
+
+def test_dotdict_set_dict():
+    dotdict = DotDict()
+    dotdict.setdefault("A", {})
+    dotdict["A"]["A"] = "A"
+    assert dotdict.A.A == "A"
+
+
 def test_dotdict_get():
     dotdict_1 = DotDict({"a": "A"})
     assert dotdict_1.a == "A"

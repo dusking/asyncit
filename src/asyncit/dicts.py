@@ -5,6 +5,7 @@ class DotDictMeta(type):
 
 class DotDict(dict, metaclass=DotDictMeta):
     """Dictionary that supports dot notation as well as dictionary access notation.
+    Use the dot motation only for get values, not for setting.
 
     usage:
     >>> d1 = DotDict()
@@ -23,14 +24,11 @@ class DotDict(dict, metaclass=DotDictMeta):
             return DotDict(value)
         return value
 
-    def __getitem__(self, k):
-        """Indexing operator"""
-        if k not in self:
-            raise KeyError(k)
-        value = self.get(k)
-        if isinstance(value, dict):
-            return DotDict(value)
-        return value
+    def __setitem__(self, *args, **kwargs):
+        new_args = [args[0], args[1]]
+        if isinstance(new_args[1], dict):
+            new_args[1] = DotDict(new_args[1])
+        return super().__setitem__(*new_args, **kwargs)
 
     def get(self, k, default=None):
         value = super().get(k, default)
